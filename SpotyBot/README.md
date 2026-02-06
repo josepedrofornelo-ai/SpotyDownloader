@@ -1,16 +1,19 @@
 # 🎵 SpotyBot - Spotify Playlist Downloader
 
-A powerful and user-friendly Spotify playlist downloader that uses **spotDL** to find and download songs from YouTube Music with full metadata support.
+A powerful and user-friendly Spotify playlist downloader with **GUI and CLI** interfaces that uses **spotDL** to find and download songs from YouTube Music with full metadata support.
 
-![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
+![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)
 
 ## ✨ Features
 
+- 🎨 **Graphical User Interface (GUI)** - Easy-to-use Tkinter interface
+- 💻 **Command Line Interface (CLI)** - Powerful terminal commands
+- 📦 **Standalone Executables** - No Python installation required
 - 🎵 **Download entire Spotify playlists, albums, or individual tracks**
 - 🔍 **Search and download songs by name**
-- 🎨 **Rich command-line interface with progress bars**
+- 🎨 **Rich progress bars and status updates**
 - ⚡ **Async downloads with configurable concurrency**
 - 📁 **Customizable output directory and file naming**
 - 🎼 **Full metadata embedding (title, artist, album, cover art, lyrics)**
@@ -21,12 +24,36 @@ A powerful and user-friendly Spotify playlist downloader that uses **spotDL** to
 
 ## 🚀 Quick Start
 
-### 1. Installation
+### Option 1: Use the GUI (Easiest)
+
+**With Python:**
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Launch the GUI
+python spotybot_gui.py
+```
+
+**Standalone Executable (No Python needed):**
+
+Download the pre-built executable for your platform:
+- **Windows:** `SpotyBot-Windows.zip`
+- **macOS:** `SpotyBot-macOS.zip`
+- **Linux:** `SpotyBot-Linux.tar.gz`
+
+Extract and double-click to run!
+
+### Option 2: Command Line
 
 ```bash
 # Clone the repository
 git clone https://github.com/spotybot/spotybot.git
 cd spotybot
+
+# Create virtual environment (recommended)
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
@@ -47,8 +74,6 @@ Run the setup wizard:
 
 ```bash
 spotybot setup
-```
-
 Or manually create a `.env` file:
 
 ```bash
@@ -56,8 +81,50 @@ cp .env.example .env
 # Edit .env with your Spotify credentials
 ```
 
+## 📦 Building Standalone Executables
+
+Create standalone applications that don't require Python:
+
+### **macOS / Linux**
+```bash
+# Install dependencies (if not already done)
+pip install -r requirements.txt
+
+# Build the executable
+./build_app.sh
+
+# Launch the app
+./launch_spotybot.sh
+```
+
+### **Windows**
+```cmd
+REM Install dependencies (if not already done)
+pip install -r requirements.txt
+
+REM Build the executable
+build_app.bat
+
+REM Launch the app
+launch_spotybot.bat
+```
+
+**Output locations:**
+- **macOS:** `dist/SpotyBot.app`
+- **Linux:** `dist/SpotyBot/SpotyBot`
+- **Windows:** `dist\SpotyBot\SpotyBot.exe`
+
+See [EXECUTABLE_README.md](EXECUTABLE_README.md) for detailed instructions on building, distributing, and platform-specific notes.
+
 ### 4. Start Downloading! 🎉
 
+**With GUI:**
+```bash
+python spotybot_gui.py
+# Or run the standalone executable
+```
+
+**With CLI:**
 ```bash
 # Interactive mode (recommended for beginners)
 spotybot interactive
@@ -73,6 +140,36 @@ spotybot search "The Beatles Hey Jude"
 ```
 
 ## 📖 Usage
+
+### Graphical User Interface (GUI)
+
+Launch the GUI for the easiest experience:
+
+```bash
+python spotybot_gui.py
+```
+
+**GUI Features:**
+- 🎯 **Auto-detects** playlist, album, or track URLs
+- 📁 **Browse** for download folder
+- ⚙️ **Configure** all settings visually:
+  - Audio quality (96k - 320k)
+  - Audio format (MP3, FLAC, OGG, OPUS, M4A)
+  - Concurrent downloads (1-12)
+  - Metadata embedding
+  - Lyrics download
+  - Skip existing files
+  - Max tracks limit
+- 📊 **Real-time progress** updates
+- 💾 **Save settings** to .env file
+- 🔄 **Reset to defaults** with one click
+- ℹ️ **Built-in help** system
+
+**Standalone GUI:**
+If you built or downloaded the standalone executable, just double-click:
+- **macOS:** `SpotyBot.app`
+- **Linux:** `SpotyBot` executable
+- **Windows:** `SpotyBot.exe`
 
 ### Command Line Interface
 
