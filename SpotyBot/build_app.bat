@@ -14,11 +14,24 @@ if not exist ".venv\Scripts\activate.bat" (
 REM Activate virtual environment
 call .venv\Scripts\activate.bat
 
+REM Check for ffmpeg
+echo Checking for ffmpeg...
+where ffmpeg >nul 2>nul
+if %ERRORLEVEL% EQU 0 (
+    echo ✅ Found ffmpeg
+    for /f "delims=" %%i in ('where ffmpeg') do set FFMPEG_PATH=%%i
+    set FFMPEG_ARGS=--add-binary="%FFMPEG_PATH%;."
+) else (
+    echo ⚠️  Warning: ffmpeg not found in PATH. It will need to be installed separately.
+    set FFMPEG_ARGS=
+)
+
 REM Build executable with PyInstaller
 pyinstaller --name=SpotyBot ^
     --noconsole ^
     --onedir ^
     --add-data="spotybot;spotybot" ^
+    %FFMPEG_ARGS% ^
     --collect-data=pykakasi ^
     --collect-data=spotdl ^
     --collect-data=yt_dlp ^

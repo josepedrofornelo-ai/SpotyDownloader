@@ -115,7 +115,11 @@ def cli(ctx, config, output, format, quality, async_downloads, max_concurrent, v
 @click.option("--info-only", is_flag=True, help="Show playlist info without downloading")
 @click.pass_context
 def playlist(ctx, url, max_tracks, info_only):
-    """Download a Spotify playlist"""
+    """Download a Spotify playlist
+    
+    Tracks will be organized in a subfolder named after the playlist
+    inside your configured output directory.
+    """
     try:
         bot = SpotyBot(config=ctx.obj["config"])
         
@@ -144,7 +148,11 @@ def playlist(ctx, url, max_tracks, info_only):
 @click.argument("url")
 @click.pass_context
 def album(ctx, url):
-    """Download a Spotify album"""
+    """Download a Spotify album
+    
+    Tracks will be organized in a subfolder named after the album
+    inside your configured output directory.
+    """
     try:
         bot = SpotyBot(config=ctx.obj["config"])
         success = bot.download_album(url, use_async=ctx.obj["use_async"])

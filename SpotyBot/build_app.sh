@@ -42,11 +42,22 @@ else
     DATA_SEP=":"
 fi
 
+# Find ffmpeg binary
+FFMPEG_PATH=$(which ffmpeg 2>/dev/null || echo "")
+FFMPEG_ARGS=""
+if [ -n "$FFMPEG_PATH" ]; then
+    echo "✅ Found ffmpeg at: $FFMPEG_PATH"
+    FFMPEG_ARGS="--add-binary=${FFMPEG_PATH}${DATA_SEP}."
+else
+    echo "⚠️  Warning: ffmpeg not found in PATH. It will need to be installed separately."
+fi
+
 # Build executable with PyInstaller
 pyinstaller --name="SpotyBot" \
     $PLATFORM_ARGS \
     --onedir \
     --add-data="spotybot${DATA_SEP}spotybot" \
+    $FFMPEG_ARGS \
     --collect-data=pykakasi \
     --collect-data=spotdl \
     --collect-data=yt_dlp \

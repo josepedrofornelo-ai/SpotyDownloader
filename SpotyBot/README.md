@@ -12,7 +12,8 @@ A powerful and user-friendly Spotify playlist downloader with **GUI and CLI** in
 - 💻 **Command Line Interface (CLI)** - Powerful terminal commands
 - 📦 **Standalone Executables** - No Python installation required
 - 🎵 **Download entire Spotify playlists, albums, or individual tracks**
-- 🔍 **Search and download songs by name**
+- � **Auto-organizes playlists and albums into named subfolders**
+- �🔍 **Search and download songs by name**
 - 🎨 **Rich progress bars and status updates**
 - ⚡ **Async downloads with configurable concurrency**
 - 📁 **Customizable output directory and file naming**
@@ -415,6 +416,9 @@ The process:
 4. ⬇️ Download audio with best quality match
 5. 🎵 Embed metadata and album art into the audio file
 6. 📁 Save to your specified output directory
+   - **Playlists**: Creates a subfolder named after the playlist (e.g., `output_dir/My Playlist/`)
+   - **Albums**: Creates a subfolder named after the album (e.g., `output_dir/Album Name/`)
+   - **Individual tracks**: Saved directly to the output directory
 
 ## ❓ Troubleshooting
 

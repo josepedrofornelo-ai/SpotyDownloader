@@ -3,15 +3,66 @@ SpotyBot Simple GUI Interface
 A user-friendly interface for downloading Spotify playlists, albums, and tracks
 """
 
+import os
+import sys
+
+# Disable locale/gettext before any other imports to prevent translation errors
+os.environ['LC_ALL'] = 'C'
+os.environ['LANG'] = 'C'
+os.environ['LANGUAGE'] = 'C'
+os.environ['LC_MESSAGES'] = 'C'
+
+# Disable gettext to prevent translation file errors
+import builtins
+_original_gettext = None
+try:
+    import gettext as _gettext_module
+    _original_gettext = _gettext_module.gettext
+    # Override gettext to return the message as-is (no translation)
+    _gettext_module.gettext = lambda message: message
+    _gettext_module.ngettext = lambda singular, plural, n: singular if n == 1 else plural
+    _gettext_module.translation = lambda *args, **kwargs: type('obj', (object,), {
+        'gettext': lambda self, s: s,
+        'ngettext': lambda self, s, p, n: s if n == 1 else p,
+        'install': lambda self, *a, **kw: None
+    })()
+except:
+    pass
+
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import threading
-import os
 from pathlib import Path
-import sys
+import locale
+
+# Set locale to avoid translation file errors
+try:
+    locale.setlocale(locale.LC_ALL, 'C')
+except:
+    pass
 
 # Add the current directory to Python path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Add bundled ffmpeg to PATH when running from PyInstaller bundle
+if getattr(sys, 'frozen', False):
+    # Running in a PyInstaller bundle
+    bundle_dir = sys._MEIPASS
+    # Check for ffmpeg in common bundle locations
+    possible_ffmpeg_paths = [
+        os.path.join(bundle_dir, 'ffmpeg'),
+        os.path.join(os.path.dirname(sys.executable), 'ffmpeg'),
+        os.path.join(os.path.dirname(os.path.dirname(sys.executable)), 'Frameworks', 'ffmpeg'),
+    ]
+    for ffmpeg_path in possible_ffmpeg_paths:
+        if os.path.exists(ffmpeg_path):
+            ffmpeg_dir = os.path.dirname(ffmpeg_path)
+            os.environ['PATH'] = ffmpeg_dir + os.pathsep + os.environ.get('PATH', '')
+            break
+    
+    # Disable locale to avoid gettext translation errors in bundle
+    os.environ['LC_ALL'] = 'C'
+    os.environ['LANG'] = 'C'
 
 try:
     from spotybot import SpotyBot, Config
@@ -48,6 +99,17 @@ class SpotyBotGUI:
         self.create_widgets()
         self.load_settings()
     
+    def get_config_file_path(self):
+        """Get the path to the config file - use writable location for bundled app"""
+        if getattr(sys, 'frozen', False):
+            # Running as bundled app - use user's home directory
+            config_dir = Path.home() / '.spotybot'
+            config_dir.mkdir(parents=True, exist_ok=True)
+            return config_dir / '.env'
+        else:
+            # Running from source - use current directory
+            return Path('.env')
+    
     def create_widgets(self):
         """Create all GUI widgets"""
         # Main container
@@ -73,7 +135,7 @@ class SpotyBotGUI:
         self.url_entry.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 10))
         
         # Auto-detect label
-        detect_label = ttk.Label(main_frame, text="✨ Auto-detects: Playlists, Albums, Tracks", 
+        detect_label = ttk.Label(main_frame, text="✨ Auto-detects: Playlists, Albums, Tracks | 📁 Creates subfolders for collections", 
                                 font=("Arial", 9), foreground="gray")
         detect_label.grid(row=3, column=0, columnspan=3, sticky=tk.W, pady=(0, 15))
         
@@ -166,7 +228,8 @@ class SpotyBotGUI:
     def load_settings(self):
         """Load settings from .env file"""
         try:
-            config = Config.from_env()
+            config_path = self.get_config_file_path()
+            config = Config.from_env(str(config_path) if config_path.exists() else None)
             self.output_dir_var.set(str(config.output_directory))
             self.format_var.set(config.download_format)
             self.quality_var.set(config.download_quality)
@@ -174,13 +237,14 @@ class SpotyBotGUI:
             self.embed_metadata_var.set(config.embed_metadata)
             self.download_lyrics_var.set(config.download_lyrics)
             self.skip_existing_var.set(config.skip_existing_files)
-            self.log("✅ Settings loaded from .env file")
+            self.log(f"✅ Settings loaded from {config_path}")
         except Exception as e:
             self.log(f"⚠️ Could not load settings: {e}")
     
     def save_settings(self):
         """Save current settings to .env file"""
         try:
+            config_path = self.get_config_file_path()
             config_content = f"""# Spotify API Configuration
 SPOTIFY_CLIENT_ID=5a8524a2e621475d8cb57ef4900e4edb
 SPOTIFY_CLIENT_SECRET=6117d497466e42e494e377aa8b1f8312
@@ -200,10 +264,13 @@ DOWNLOAD_LYRICS={str(self.download_lyrics_var.get()).lower()}
 AUDIO_PROVIDER=youtube-music
 """
             
-            with open(".env", "w") as f:
+            with open(config_path, "w") as f:
                 f.write(config_content)
             
-            self.log("💾 Settings saved to .env file")
+            # Reset bot instance to apply new settings on next download
+            self.bot = None
+            
+            self.log(f"💾 Settings saved to {config_path}")
             messagebox.showinfo("Success", "Settings saved successfully!")
             
         except Exception as e:
@@ -294,11 +361,18 @@ AUDIO_PROVIDER=youtube-music
         try:
             self.log("🔧 Initializing SpotyBot...")
             
-            # Create config and bot
+            # Create config
             config = self.create_config()
-            self.bot = SpotyBot(config)
             
-            self.log("✅ SpotyBot initialized successfully")
+            # Reuse existing bot if available, otherwise create new one
+            if self.bot is None:
+                self.bot = SpotyBot(config)
+                self.log("✅ SpotyBot initialized successfully")
+            else:
+                # Update config for existing bot
+                self.bot.config = config
+                self.bot.downloader.config = config
+                self.log("✅ Using existing SpotyBot instance")
             
             url = self.url_var.get().strip()
             self.log(f"🎵 Processing URL: {url}")
@@ -416,6 +490,11 @@ AUDIO_PROVIDER=youtube-music
 • Albums: https://open.spotify.com/album/...  
 • Tracks: https://open.spotify.com/track/...
 • Or just type a song name to search!
+
+📁 Folder Organization:
+• Playlists: Downloaded to "Download Folder/Playlist Name/"
+• Albums: Downloaded to "Download Folder/Album Name/"
+• Single Tracks: Downloaded directly to "Download Folder/"
 
 ⚙️ Settings:
 • Quality: Higher = better sound, larger files

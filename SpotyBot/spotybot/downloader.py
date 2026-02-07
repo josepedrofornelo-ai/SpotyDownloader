@@ -119,6 +119,34 @@ class SpotifyDownloader:
         
         return filename
     
+    def _create_collection_folder(self, collection_name: str) -> Path:
+        """Create a subfolder for a playlist or album"""
+        # Clean the collection name for filesystem
+        clean_name = self._clean_filename(collection_name)
+        
+        # Create the subfolder path
+        folder_path = self.config.output_directory / clean_name
+        
+        # Create the folder if it doesn't exist
+        folder_path.mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"Created/using collection folder: {folder_path}")
+        return folder_path
+    
+    def _move_file_to_folder(self, file_path: Path, target_folder: Path) -> Path:
+        """Move a downloaded file to a target folder"""
+        try:
+            if file_path and file_path.exists():
+                target_path = target_folder / file_path.name
+                # Move the file
+                file_path.rename(target_path)
+                logger.debug(f"Moved {file_path.name} to {target_folder}")
+                return target_path
+            return file_path
+        except Exception as e:
+            logger.warning(f"Could not move file {file_path}: {e}")
+            return file_path
+    
     def download_track(self, track_info: Dict[str, Any]) -> DownloadResult:
         """Download a single track"""
         try:
@@ -262,8 +290,12 @@ class SpotifyDownloader:
         try:
             # Get playlist information
             playlist_info = self.spotify_client.get_playlist_info(playlist_url)
-            logger.info(f"Starting download of playlist: {playlist_info['name']}")
+            playlist_name = playlist_info['name']
+            logger.info(f"Starting download of playlist: {playlist_name}")
             logger.info(f"Total tracks in playlist: {playlist_info['total_tracks']}")
+            
+            # Create subfolder for this playlist
+            playlist_folder = self._create_collection_folder(playlist_name)
             
             # Get tracks
             tracks = self.spotify_client.get_playlist_tracks(playlist_url, limit=max_tracks)
@@ -272,10 +304,16 @@ class SpotifyDownloader:
                 logger.warning("No tracks found in playlist")
                 return playlist_info, []
             
-            logger.info(f"Downloading {len(tracks)} tracks from playlist")
+            logger.info(f"Downloading {len(tracks)} tracks to: {playlist_folder}")
             
-            # Use synchronous download to avoid event loop conflicts
+            # Download tracks to main output directory
             results = self.download_tracks_sync(tracks)
+            
+            # Move downloaded files to playlist subfolder
+            for result in results:
+                if result.success and result.file_path:
+                    new_path = self._move_file_to_folder(result.file_path, playlist_folder)
+                    result.file_path = new_path
             
             return playlist_info, results
             
@@ -293,10 +331,23 @@ class SpotifyDownloader:
                 logger.warning("No tracks found in album")
                 return []
             
-            logger.info(f"Downloading {len(tracks)} tracks from album")
+            # Get album name from first track
+            album_name = tracks[0].get('album_name', 'Unknown Album')
+            logger.info(f"Starting download of album: {album_name}")
             
-            # Use synchronous download to avoid event loop conflicts
+            # Create subfolder for this album
+            album_folder = self._create_collection_folder(album_name)
+            
+            logger.info(f"Downloading {len(tracks)} tracks to: {album_folder}")
+            
+            # Download tracks to main output directory
             results = self.download_tracks_sync(tracks)
+            
+            # Move downloaded files to album subfolder
+            for result in results:
+                if result.success and result.file_path:
+                    new_path = self._move_file_to_folder(result.file_path, album_folder)
+                    result.file_path = new_path
             
             return results
             
