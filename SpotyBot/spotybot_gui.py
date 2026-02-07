@@ -32,8 +32,12 @@ except:
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import threading
+import logging
 from pathlib import Path
 import locale
+
+# Set up logger
+logger = logging.getLogger(__name__)
 
 # Set locale to avoid translation file errors
 try:
@@ -96,8 +100,12 @@ class SpotyBotGUI:
         self.downloading = False
         self.bot = None
         
+        # Auto-save timer
+        self.auto_save_timer = None
+        
         self.create_widgets()
         self.load_settings()
+        self.setup_auto_save()
     
     def get_config_file_path(self):
         """Get the path to the config file - use writable location for bundled app"""
@@ -188,6 +196,11 @@ class SpotyBotGUI:
         ttk.Checkbutton(settings_frame, text="Skip Existing Files", 
                        variable=self.skip_existing_var).grid(row=2, column=2, sticky=tk.W, pady=(10, 0))
         
+        # Auto-save indicator
+        auto_save_label = ttk.Label(settings_frame, text="✨ Settings auto-save", 
+                                    font=('TkDefaultFont', 9, 'italic'), foreground='gray')
+        auto_save_label.grid(row=3, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
+        
         # Buttons Section
         button_frame = ttk.Frame(main_frame)
         button_frame.grid(row=7, column=0, columnspan=3, pady=(0, 15))
@@ -241,8 +254,28 @@ class SpotyBotGUI:
         except Exception as e:
             self.log(f"⚠️ Could not load settings: {e}")
     
-    def save_settings(self):
-        """Save current settings to .env file"""
+    def setup_auto_save(self):
+        """Setup automatic saving when settings change"""
+        # Add trace callbacks to all variables
+        self.format_var.trace_add('write', lambda *args: self.schedule_auto_save())
+        self.quality_var.trace_add('write', lambda *args: self.schedule_auto_save())
+        self.output_dir_var.trace_add('write', lambda *args: self.schedule_auto_save())
+        self.concurrent_var.trace_add('write', lambda *args: self.schedule_auto_save())
+        self.embed_metadata_var.trace_add('write', lambda *args: self.schedule_auto_save())
+        self.download_lyrics_var.trace_add('write', lambda *args: self.schedule_auto_save())
+        self.skip_existing_var.trace_add('write', lambda *args: self.schedule_auto_save())
+    
+    def schedule_auto_save(self):
+        """Schedule auto-save with a small delay to avoid too frequent saves"""
+        # Cancel any pending auto-save
+        if self.auto_save_timer:
+            self.root.after_cancel(self.auto_save_timer)
+        
+        # Schedule new auto-save after 1 second of inactivity
+        self.auto_save_timer = self.root.after(1000, self.auto_save_settings)
+    
+    def auto_save_settings(self):
+        """Save settings automatically without showing success message"""
         try:
             config_path = self.get_config_file_path()
             config_content = f"""# Spotify API Configuration
@@ -270,7 +303,19 @@ AUDIO_PROVIDER=youtube-music
             # Reset bot instance to apply new settings on next download
             self.bot = None
             
-            self.log(f"💾 Settings saved to {config_path}")
+            logger.debug(f"Auto-saved settings to {config_path}")
+            
+        except Exception as e:
+            logger.error(f"Error auto-saving settings: {e}")
+    
+    def save_settings(self):
+        """Save current settings to .env file (manual save with confirmation)"""
+        try:
+            # Use the auto-save logic
+            self.auto_save_settings()
+            
+            # Show success message for manual save
+            self.log(f"💾 Settings saved manually")
             messagebox.showinfo("Success", "Settings saved successfully!")
             
         except Exception as e:
@@ -372,7 +417,9 @@ AUDIO_PROVIDER=youtube-music
                 # Update config for existing bot
                 self.bot.config = config
                 self.bot.downloader.config = config
-                self.log("✅ Using existing SpotyBot instance")
+                # Reinitialize spotDL to apply new settings (especially lyrics)
+                self.bot.downloader._initialize_spotdl()
+                self.log("✅ Using existing SpotyBot instance (config updated)")
             
             url = self.url_var.get().strip()
             self.log(f"🎵 Processing URL: {url}")

@@ -4,6 +4,7 @@ Download manager using spotDL library
 
 import logging
 import asyncio
+import shutil
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
@@ -46,15 +47,21 @@ class SpotifyDownloader:
         self.config.output_directory.mkdir(parents=True, exist_ok=True)
         
         # Initialize spotDL with configuration
-        spotdl_options = config.get_spotdl_options()
-        self.spotdl = Spotdl(
-            client_id=config.spotify_client_id,
-            client_secret=config.spotify_client_secret,
-            downloader_settings=spotdl_options
-        )
+        self._initialize_spotdl()
         
         logger.info(f"Downloader initialized with output directory: {self.config.output_directory}")
         logger.info(f"Using audio provider: {self.config.audio_provider}")
+        logger.info(f"Lyrics download: {'enabled' if self.config.download_lyrics else 'disabled'}")
+    
+    def _initialize_spotdl(self):
+        """Initialize or reinitialize spotDL with current config"""
+        spotdl_options = self.config.get_spotdl_options()
+        self.spotdl = Spotdl(
+            client_id=self.config.spotify_client_id,
+            client_secret=self.config.spotify_client_secret,
+            downloader_settings=spotdl_options
+        )
+        logger.debug(f"spotDL initialized with generate_lrc={spotdl_options.get('generate_lrc', False)}")
     
     def _track_to_song(self, track_info: Dict[str, Any]) -> Song:
         """Convert track info dictionary to spotDL Song object"""
@@ -134,17 +141,46 @@ class SpotifyDownloader:
         return folder_path
     
     def _move_file_to_folder(self, file_path: Path, target_folder: Path) -> Path:
-        """Move a downloaded file to a target folder"""
+        """Move a downloaded file to a target folder, including related files like lyrics"""
         try:
             if file_path and file_path.exists():
                 target_path = target_folder / file_path.name
-                # Move the file
-                file_path.rename(target_path)
-                logger.debug(f"Moved {file_path.name} to {target_folder}")
-                return target_path
-            return file_path
+                
+                # If target exists, remove it first to avoid errors
+                if target_path.exists():
+                    target_path.unlink()
+                    logger.debug(f"Removed existing file: {target_path}")
+                
+                # Use shutil.move for robust file moving
+                moved_path = shutil.move(str(file_path), str(target_path))
+                logger.info(f"Moved {file_path.name} to {target_folder}")
+                
+                # Also move any related files (e.g., .lrc lyrics files) if enabled
+                if self.config.download_lyrics:
+                    base_name = file_path.stem
+                    parent_dir = file_path.parent
+                    for related_file in parent_dir.glob(f"{base_name}.*"):
+                        if related_file != file_path and related_file.exists():
+                            related_target = target_folder / related_file.name
+                            if related_target.exists():
+                                related_target.unlink()
+                            shutil.move(str(related_file), str(related_target))
+                            logger.debug(f"Moved related file {related_file.name} to {target_folder}")
+                else:
+                    # Clean up any .lrc files that might have been created despite settings
+                    base_name = file_path.stem
+                    parent_dir = file_path.parent
+                    for lrc_file in parent_dir.glob(f"{base_name}.lrc"):
+                        if lrc_file.exists():
+                            lrc_file.unlink()
+                            logger.debug(f"Removed unwanted lyrics file: {lrc_file.name}")
+                
+                return Path(moved_path)
+            else:
+                logger.warning(f"File not found for moving: {file_path}")
+                return file_path
         except Exception as e:
-            logger.warning(f"Could not move file {file_path}: {e}")
+            logger.error(f"Failed to move file {file_path}: {e}")
             return file_path
     
     def download_track(self, track_info: Dict[str, Any]) -> DownloadResult:
@@ -310,10 +346,15 @@ class SpotifyDownloader:
             results = self.download_tracks_sync(tracks)
             
             # Move downloaded files to playlist subfolder
+            moved_count = 0
             for result in results:
                 if result.success and result.file_path:
                     new_path = self._move_file_to_folder(result.file_path, playlist_folder)
                     result.file_path = new_path
+                    if new_path.parent == playlist_folder:
+                        moved_count += 1
+            
+            logger.info(f"Moved {moved_count} files to playlist folder")
             
             return playlist_info, results
             
@@ -344,10 +385,15 @@ class SpotifyDownloader:
             results = self.download_tracks_sync(tracks)
             
             # Move downloaded files to album subfolder
+            moved_count = 0
             for result in results:
                 if result.success and result.file_path:
                     new_path = self._move_file_to_folder(result.file_path, album_folder)
                     result.file_path = new_path
+                    if new_path.parent == album_folder:
+                        moved_count += 1
+            
+            logger.info(f"Moved {moved_count} files to album folder")
             
             return results
             
