@@ -23,6 +23,8 @@ A powerful and user-friendly Spotify playlist downloader with **GUI and CLI** in
 - 🌐 **Interactive mode for easy use**
 - ⚙️ **Configurable via environment variables or config files**
 
+> **Note:** A modern GUI version with CustomTkinter is available in the `archived_modern_gui/` folder. The classic GUI (Tkinter) is the default and recommended interface.
+
 ## 🚀 Quick Start
 
 ### Option 1: Use the GUI (Easiest)
@@ -32,7 +34,11 @@ A powerful and user-friendly Spotify playlist downloader with **GUI and CLI** in
 # Install dependencies
 pip install -r requirements.txt
 
-# Launch the GUI
+# Launch the GUI using the launcher script
+./launch_gui.sh        # macOS/Linux
+launch_gui.bat         # Windows
+
+# Or directly
 python spotybot_gui.py
 ```
 
@@ -273,7 +279,7 @@ MAX_CONCURRENT_DOWNLOADS=4
 SKIP_EXISTING_FILES=true
 EMBED_METADATA=true
 DOWNLOAD_LYRICS=true
-AUDIO_PROVIDER=youtube-music           # youtube-music, youtube, soundcloud
+AUDIO_PROVIDER=youtube                 # youtube, soundcloud, bandcamp
 ```
 
 ### Output Template Variables

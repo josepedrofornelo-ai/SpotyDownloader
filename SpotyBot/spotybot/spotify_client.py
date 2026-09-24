@@ -138,7 +138,13 @@ class SpotifyClient:
                 
                 offset += batch_size
             
-            logger.info(f"Successfully fetched {len(tracks)} tracks from playlist")
+            # Add 1-based playlist position and list length to every track
+            total = len(tracks)
+            for i, track in enumerate(tracks):
+                track["playlist_position"] = i + 1
+                track["list_length"] = total
+
+            logger.info(f"Successfully fetched {total} tracks from playlist")
             return tracks
             
         except Exception as e:

@@ -123,7 +123,7 @@ class SpotyBot:
             self.logger.error(f"Playlist download failed: {e}", exc_info=True)
             return False
     
-    def download_album(self, album_url: str, use_async: bool = True, show_summary: bool = True) -> bool:
+    def download_album(self, album_url: str, use_async: bool = True, show_summary: bool = True, progress_callback=None) -> bool:
         """
         Download a Spotify album
         
@@ -131,6 +131,7 @@ class SpotyBot:
             album_url: Spotify album URL
             use_async: Whether to use async downloads
             show_summary: Whether to show download summary
+            progress_callback: optional callable(done, total, track_name)
         
         Returns:
             True if download was successful, False otherwise
@@ -139,7 +140,7 @@ class SpotyBot:
             console.print(f"\n[bold blue]💿 Processing album: {album_url}[/bold blue]")
             
             # Download album
-            results = self.downloader.download_album(album_url, use_async=use_async)
+            results = self.downloader.download_album(album_url, use_async=use_async, progress_callback=progress_callback)
             
             if show_summary:
                 self._show_download_summary({"name": "Album", "total_tracks": len(results)}, results)

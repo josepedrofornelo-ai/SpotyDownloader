@@ -42,19 +42,34 @@ class SpotifyDownloader:
         """Initialize downloader with configuration"""
         self.config = config
         self.spotify_client = SpotifyClient(config)
+        self.spotdl = None  # Lazily initialized inside the download thread
         
         # Ensure output directory exists
         self.config.output_directory.mkdir(parents=True, exist_ok=True)
-        
-        # Initialize spotDL with configuration
-        self._initialize_spotdl()
         
         logger.info(f"Downloader initialized with output directory: {self.config.output_directory}")
         logger.info(f"Using audio provider: {self.config.audio_provider}")
         logger.info(f"Lyrics download: {'enabled' if self.config.download_lyrics else 'disabled'}")
     
-    def _initialize_spotdl(self):
-        """Initialize or reinitialize spotDL with current config"""
+    def _ensure_spotdl(self):
+        """Initialize spotDL if not already done, and register its event loop as the
+        *current thread's* event loop.
+
+        The GUI processes each queued download in a fresh worker thread, but
+        `self.spotdl` (and its internal event loop) is only created once and reused.
+        asyncio's "current event loop" is thread-local, so every new thread must call
+        `asyncio.set_event_loop()` with spotDL's loop before calling into spotDL,
+        otherwise spotDL's internal async code raises
+        "There is no current event loop in thread ...".
+        """
+        if self.spotdl is not None:
+            asyncio.set_event_loop(self.spotdl.downloader.loop)
+            return
+
+        # Create and set a fresh event loop for this thread so spotDL's internal
+        # asyncio machinery attaches to the correct loop.
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         spotdl_options = self.config.get_spotdl_options()
         self.spotdl = Spotdl(
             client_id=self.config.spotify_client_id,
@@ -63,6 +78,27 @@ class SpotifyDownloader:
         )
         logger.debug(f"spotDL initialized with generate_lrc={spotdl_options.get('generate_lrc', False)}")
     
+    def _add_position_prefix(self, file_path: Path, position: int, total: int) -> Path:
+        """Rename a downloaded file to add a zero-padded position prefix.
+
+        E.g.  position=3, total=75  →  '03 - original_name.mp3'
+        """
+        if not file_path or not file_path.exists():
+            return file_path
+        try:
+            padding = len(str(total))
+            prefix = str(position).zfill(padding)
+            new_name = f"{prefix} - {file_path.name}"
+            new_path = file_path.parent / new_name
+            if new_path.exists():
+                new_path.unlink()
+            file_path.rename(new_path)
+            logger.debug(f"Renamed to: {new_name}")
+            return new_path
+        except Exception as e:
+            logger.warning(f"Could not rename file {file_path}: {e}")
+            return file_path
+
     def _track_to_song(self, track_info: Dict[str, Any]) -> Song:
         """Convert track info dictionary to spotDL Song object"""
         try:
@@ -193,6 +229,9 @@ class SpotifyDownloader:
             if existing_file:
                 return DownloadResult(track_info, True, existing_file)
             
+            # Initialize spotDL inside this thread (creates the correct event loop)
+            self._ensure_spotdl()
+
             # Convert to Song object
             song = self._track_to_song(track_info)
             
@@ -207,6 +246,19 @@ class SpotifyDownloader:
                 if file_path and file_path.exists():
                     logger.info(f"Successfully downloaded: {track_name} -> {file_path}")
                     return DownloadResult(track_info, True, file_path)
+                elif file_path is None:
+                    # spotDL returns None when a file is skipped (already exists on disk).
+                    # Try our own pre-check first, then do a broader title search.
+                    existing = self._check_existing_file(track_info)
+                    if existing:
+                        logger.info(f"Track already exists, skipped by spotDL: {track_name} -> {existing}")
+                        return DownloadResult(track_info, True, existing)
+                    # Broader glob search using the track name in the output directory
+                    clean_title = self._clean_filename(track_info.get('name', ''))
+                    for candidate in self.config.output_directory.rglob(f"*{clean_title}*"):
+                        if candidate.is_file():
+                            logger.info(f"Found existing file for {track_name}: {candidate}")
+                            return DownloadResult(track_info, True, candidate)
             
             error_msg = f"Download failed: {track_name}"
             logger.error(error_msg)
@@ -217,186 +269,205 @@ class SpotifyDownloader:
             logger.error(error_msg)
             return DownloadResult(track_info, False, error=error_msg)
     
-    def download_tracks_batch(self, tracks: List[Dict[str, Any]], progress_callback=None) -> List[DownloadResult]:
-        """Download multiple tracks with progress tracking"""
+    def _process_batch_results(
+        self,
+        batch_tracks: List[Dict[str, Any]],
+        batch_download: list,
+    ) -> List[DownloadResult]:
+        """Convert raw spotDL batch results into DownloadResult objects."""
         results = []
+        for j, (song_result, file_path) in enumerate(batch_download):
+            track_info = batch_tracks[j] if j < len(batch_tracks) else {}
+            track_name = f"{track_info.get('main_artist', 'Unknown')} - {track_info.get('name', 'Unknown')}"
+
+            if file_path and file_path.exists():
+                result = DownloadResult(track_info, True, file_path)
+                logger.info(f"Downloaded: {track_name} -> {file_path}")
+            elif file_path is None:
+                existing = self._check_existing_file(track_info)
+                if not existing:
+                    clean_title = self._clean_filename(track_info.get('name', ''))
+                    candidates = list(self.config.output_directory.rglob(f"*{clean_title}*"))
+                    existing = next((c for c in candidates if c.is_file()), None)
+                if existing:
+                    result = DownloadResult(track_info, True, existing)
+                    logger.info(f"Already exists, skipped: {track_name}")
+                else:
+                    result = DownloadResult(track_info, False, error="Download failed (file not found)")
+                    logger.error(f"Failed: {track_name}")
+            else:
+                result = DownloadResult(track_info, False, error="Download failed")
+                logger.error(f"Failed: {track_name}")
+
+            results.append(result)
+        return results
+
+    def download_tracks_batch(
+        self,
+        tracks: List[Dict[str, Any]],
+        progress_callback=None,
+    ) -> List[DownloadResult]:
+        """Download tracks in concurrent mini-batches with per-track progress reporting.
+
+        Uses spotDL's own thread pool within each mini-batch (size = max_concurrent_downloads),
+        so N songs are downloaded in parallel while progress is reported after each batch.
+
+        Args:
+            tracks: list of track dicts.
+            progress_callback: optional callable(done: int, total: int, track_name: str)
+                called after every individual track result is processed.
+        """
         total_tracks = len(tracks)
-        
-        logger.info(f"Starting download of {total_tracks} tracks")
-        
+        batch_size = max(1, self.config.max_concurrent_downloads)
+        logger.info(f"Starting download of {total_tracks} tracks (batch_size={batch_size})")
+
+        # Ensure spotDL is initialised inside this thread
+        self._ensure_spotdl()
+
         if self.config.show_progress and not progress_callback:
             console.print(f"[bold blue]🎵 Starting download of {total_tracks} tracks...[/bold blue]")
-        
-        # Simple loop with console output
-        for i, track in enumerate(tracks, 1):
-            result = self.download_track(track)
-            results.append(result)
-            
-            if progress_callback:
-                progress_callback(i, total_tracks, result)
-            elif self.config.show_progress:
-                status = "✅" if result.success else "❌"
-                console.print(f"{status} [{i}/{total_tracks}] {result.track_name}")
-            
-            logger.info(f"Progress: {i}/{total_tracks}")
-        
-        # Summary
-        successful = sum(1 for r in results if r.success)
-        failed = total_tracks - successful
-        
-        logger.info(f"Download completed: {successful} successful, {failed} failed")
-        
-        return results
+
+        all_results: List[DownloadResult] = []
+        done_count = 0
+
+        for batch_start in range(0, total_tracks, batch_size):
+            batch_tracks = tracks[batch_start:batch_start + batch_size]
+
+            # Build Song objects for this batch
+            songs = []
+            valid_tracks = []
+            for track_info in batch_tracks:
+                try:
+                    songs.append(self._track_to_song(track_info))
+                    valid_tracks.append(track_info)
+                except Exception as e:
+                    logger.error(f"Error converting track to Song: {e}")
+                    all_results.append(DownloadResult(track_info, False, error=str(e)))
+                    done_count += 1
+                    if progress_callback:
+                        track_name = f"{track_info.get('main_artist', '?')} - {track_info.get('name', '?')}"
+                        progress_callback(done_count, total_tracks, track_name)
+
+            if not songs:
+                continue
+
+            try:
+                # Download the whole mini-batch concurrently via spotDL's thread pool
+                batch_download = self.spotdl.download_songs(songs)
+                batch_results = self._process_batch_results(valid_tracks, batch_download)
+            except Exception as e:
+                logger.error(f"Batch download error: {e}")
+                batch_results = [DownloadResult(t, False, error=str(e)) for t in valid_tracks]
+
+            for result in batch_results:
+                all_results.append(result)
+                done_count += 1
+                track_name = result.track_name
+                if progress_callback:
+                    progress_callback(done_count, total_tracks, track_name)
+                elif self.config.show_progress:
+                    status = "✅" if result.success else "❌"
+                    console.print(f"{status} [{done_count}/{total_tracks}] {track_name}")
+
+            logger.info(f"Batch done: {done_count}/{total_tracks}")
+
+        successful = sum(1 for r in all_results if r.success)
+        logger.info(f"Download completed: {successful} successful, {total_tracks - successful} failed")
+        return all_results
     
     def download_tracks_sync(self, tracks: List[Dict[str, Any]]) -> List[DownloadResult]:
-        """Download tracks synchronously using spotDL's built-in batch processing"""
-        total_tracks = len(tracks)
-        logger.info(f"Starting synchronous download of {total_tracks} tracks")
-        
-        if self.config.show_progress:
-            console.print(f"[bold blue]🎵 Starting download of {total_tracks} tracks...[/bold blue]")
-        
-        # Convert all tracks to Song objects
-        songs = []
-        track_map = {}
-        
-        for i, track_info in enumerate(tracks):
-            try:
-                song = self._track_to_song(track_info)
-                songs.append(song)
-                track_map[i] = track_info
-            except Exception as e:
-                logger.error(f"Error converting track to song: {e}")
-                continue
-        
-        results = []
-        
-        try:
-            # Use spotDL's download_songs method which handles everything internally
-            download_results = self.spotdl.download_songs(songs)
-            
-            # Process results
-            for i, (song_result, file_path) in enumerate(download_results):
-                if i in track_map:
-                    track_info = track_map[i]
-                    track_name = f"{track_info.get('main_artist', 'Unknown')} - {track_info.get('name', 'Unknown')}"
-                    
-                    if file_path and file_path.exists():
-                        result = DownloadResult(track_info, True, file_path)
-                        status = "✅"
-                        logger.info(f"Successfully downloaded: {track_name} -> {file_path}")
-                    else:
-                        result = DownloadResult(track_info, False, error="Download failed")
-                        status = "❌"
-                        logger.error(f"Failed to download: {track_name}")
-                    
-                    results.append(result)
-                    
-                    if self.config.show_progress:
-                        console.print(f"{status} [{len(results)}/{total_tracks}] {result.track_name}")
-            
-        except Exception as e:
-            logger.error(f"Batch download failed: {e}")
-            # If batch fails, mark all tracks as failed
-            for i, track_info in enumerate(tracks):
-                result = DownloadResult(track_info, False, error=str(e))
-                results.append(result)
-                
-                if self.config.show_progress:
-                    console.print(f"❌ [{len(results)}/{total_tracks}] {result.track_name}")
-        
-        successful = sum(1 for r in results if r.success)
-        failed = total_tracks - successful
-        logger.info(f"Download completed: {successful} successful, {failed} failed")
-        
-        return results
-    
-    def download_playlist(self, playlist_url: str, max_tracks: Optional[int] = None, use_async: bool = True) -> Tuple[Dict[str, Any], List[DownloadResult]]:
+        """Alias kept for CLI/backwards compatibility — delegates to download_tracks_batch."""
+        return self.download_tracks_batch(tracks)
+
+    def download_playlist(
+        self,
+        playlist_url: str,
+        max_tracks: Optional[int] = None,
+        use_async: bool = True,
+        progress_callback=None,
+    ) -> Tuple[Dict[str, Any], List[DownloadResult]]:
         """
-        Download entire Spotify playlist
-        
+        Download entire Spotify playlist.
+
         Args:
             playlist_url: Spotify playlist URL
             max_tracks: Maximum number of tracks to download (None for all)
-            use_async: Whether to use async downloads
-        
+            use_async: Unused; kept for API compatibility
+            progress_callback: optional callable(done: int, total: int, track_name: str)
+
         Returns:
             Tuple of (playlist_info, download_results)
         """
         try:
-            # Get playlist information
             playlist_info = self.spotify_client.get_playlist_info(playlist_url)
             playlist_name = playlist_info['name']
             logger.info(f"Starting download of playlist: {playlist_name}")
-            logger.info(f"Total tracks in playlist: {playlist_info['total_tracks']}")
-            
-            # Create subfolder for this playlist
+
             playlist_folder = self._create_collection_folder(playlist_name)
-            
-            # Get tracks
             tracks = self.spotify_client.get_playlist_tracks(playlist_url, limit=max_tracks)
-            
+
             if not tracks:
                 logger.warning("No tracks found in playlist")
                 return playlist_info, []
-            
-            logger.info(f"Downloading {len(tracks)} tracks to: {playlist_folder}")
-            
-            # Download tracks to main output directory
-            results = self.download_tracks_sync(tracks)
-            
-            # Move downloaded files to playlist subfolder
+
+            total = len(tracks)
+            logger.info(f"Downloading {total} tracks to: {playlist_folder}")
+
+            # Download one-by-one so per-track callbacks work
+            results = self.download_tracks_batch(tracks, progress_callback=progress_callback)
+
+            # Rename with position prefix then move to playlist subfolder
             moved_count = 0
-            for result in results:
+            for i, result in enumerate(results, 1):
                 if result.success and result.file_path:
+                    result.file_path = self._add_position_prefix(result.file_path, i, total)
                     new_path = self._move_file_to_folder(result.file_path, playlist_folder)
                     result.file_path = new_path
                     if new_path.parent == playlist_folder:
                         moved_count += 1
-            
+
             logger.info(f"Moved {moved_count} files to playlist folder")
-            
             return playlist_info, results
-            
+
         except Exception as e:
             logger.error(f"Error downloading playlist: {e}")
             raise
     
-    def download_album(self, album_url: str, use_async: bool = True) -> List[DownloadResult]:
-        """Download entire Spotify album"""
+    def download_album(
+        self,
+        album_url: str,
+        use_async: bool = True,
+        progress_callback=None,
+    ) -> List[DownloadResult]:
+        """Download entire Spotify album."""
         try:
-            # Get album tracks
             tracks = self.spotify_client.get_album_tracks(album_url)
-            
+
             if not tracks:
                 logger.warning("No tracks found in album")
                 return []
-            
-            # Get album name from first track
+
             album_name = tracks[0].get('album_name', 'Unknown Album')
+            total = len(tracks)
             logger.info(f"Starting download of album: {album_name}")
-            
-            # Create subfolder for this album
+
             album_folder = self._create_collection_folder(album_name)
-            
-            logger.info(f"Downloading {len(tracks)} tracks to: {album_folder}")
-            
-            # Download tracks to main output directory
-            results = self.download_tracks_sync(tracks)
-            
-            # Move downloaded files to album subfolder
+            logger.info(f"Downloading {total} tracks to: {album_folder}")
+
+            results = self.download_tracks_batch(tracks, progress_callback=progress_callback)
+
             moved_count = 0
-            for result in results:
+            for i, result in enumerate(results, 1):
                 if result.success and result.file_path:
+                    result.file_path = self._add_position_prefix(result.file_path, i, total)
                     new_path = self._move_file_to_folder(result.file_path, album_folder)
                     result.file_path = new_path
                     if new_path.parent == album_folder:
                         moved_count += 1
-            
+
             logger.info(f"Moved {moved_count} files to album folder")
-            
             return results
-            
+
         except Exception as e:
             logger.error(f"Error downloading album: {e}")
             raise

@@ -208,14 +208,9 @@ class ModernSpotyBotGUI(ctk.CTk):
         self.current_download: Optional[DownloadQueueItem] = None
         self.bot: Optional[SpotyBot] = None
         self.is_downloading = False
-
-        # Per-track progress state (updated from download thread via callbacks)
-        self.current_track_num: int = 0
-        self.current_track_total: int = 0
-        self.current_track_name: str = ""
         
         # Settings variables
-        self.output_dir = ctk.StringVar(value=str(Path.home() / "Music" / "spotybot"))
+        self.output_dir = ctk.StringVar(value=str(Path.home() / "Music" / "SpotyBot"))
         self.format_var = ctk.StringVar(value="mp3")
         self.quality_var = ctk.StringVar(value="192k")
         self.concurrent_var = ctk.IntVar(value=8)
@@ -463,28 +458,17 @@ class ModernSpotyBotGUI(ctk.CTk):
         status_title.grid(row=0, column=0, sticky="w", padx=20, pady=(15, 10))
         
         # Progress bar
-        self.progress_bar = ctk.CTkProgressBar(status_card, height=20, corner_radius=8)
-        self.progress_bar.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 4))
+        self.progress_bar = ctk.CTkProgressBar(status_card, height=25, corner_radius=10)
+        self.progress_bar.grid(row=1, column=0, sticky="ew", padx=20, pady=10)
         self.progress_bar.set(0)
-
-        # Track counter label  (e.g. "Downloading 3 / 75")
-        self.track_counter_label = ctk.CTkLabel(
-            status_card,
-            text="",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            anchor="w",
-        )
-        self.track_counter_label.grid(row=2, column=0, sticky="w", padx=20, pady=(0, 2))
-
-        # Track name label
+        
+        # Progress label
         self.progress_label = ctk.CTkLabel(
             status_card,
             text="Ready to download",
-            font=ctk.CTkFont(size=12),
-            text_color="gray",
-            anchor="w",
+            font=ctk.CTkFont(size=14)
         )
-        self.progress_label.grid(row=3, column=0, sticky="w", padx=20, pady=(0, 8))
+        self.progress_label.grid(row=2, column=0, sticky="w", padx=20, pady=(0, 5))
         
         # Status log
         self.status_textbox = ctk.CTkTextbox(
@@ -493,8 +477,7 @@ class ModernSpotyBotGUI(ctk.CTk):
             font=ctk.CTkFont(family="Courier", size=11),
             corner_radius=10
         )
-        self.status_textbox.grid(row=4, column=0, sticky="nsew", padx=20, pady=(10, 15))
-        status_card.grid_rowconfigure(4, weight=1)
+        self.status_textbox.grid(row=3, column=0, sticky="nsew", padx=20, pady=(10, 15))
         
         return page
     
@@ -989,11 +972,6 @@ class ModernSpotyBotGUI(ctk.CTk):
         max_retries = 2
         retry_count = 0
         last_error = None
-
-        # Reset per-track progress for this new download
-        self.current_track_num = 0
-        self.current_track_total = 0
-        self.current_track_name = ""
         
         while retry_count <= max_retries:
             try:
@@ -1017,51 +995,22 @@ class ModernSpotyBotGUI(ctk.CTk):
                 # Download based on type
                 if url_type == "playlist":
                     max_tracks = int(item.settings.get("max_tracks")) if item.settings.get("max_tracks") else None
-
-                    def _playlist_cb(done, total, track_name):
-                        self.current_track_num = done
-                        self.current_track_total = total
-                        self.current_track_name = track_name
-                        item.progress = done / total * 100 if total else 0
-
-                    playlist_info, results = self.bot.downloader.download_playlist(
-                        url, max_tracks=max_tracks, use_async=False, progress_callback=_playlist_cb
-                    )
+                    playlist_info, results = self.bot.downloader.download_playlist(url, max_tracks=max_tracks, use_async=False)
                     item.tracks_completed = sum(1 for r in results if r.success)
                     item.tracks_total = len(results)
                     self.log_status(f"📊 Downloaded {item.tracks_completed}/{item.tracks_total} tracks")
-                    self.log_status(
-                        f"📁 Saved to: {Path(item.settings['output_dir']) / playlist_info['name']}"
-                    )
-
-                    if item.tracks_completed == 0:
-                        raise Exception("Playlist download finished but no tracks were saved")
                     
                 elif url_type == "album":
-                    def _album_cb(done, total, track_name):
-                        self.current_track_num = done
-                        self.current_track_total = total
-                        self.current_track_name = track_name
-                        item.progress = done / total * 100 if total else 0
-
-                    results = self.bot.download_album(url, use_async=False, show_summary=False, progress_callback=_album_cb)
+                    results = self.bot.download_album(url, use_async=False, show_summary=False)
                     item.tracks_completed = sum(1 for r in results if r.success)
                     item.tracks_total = len(results)
                     self.log_status(f"💿 Downloaded {item.tracks_completed}/{item.tracks_total} tracks from album")
-
-                    if item.tracks_completed == 0:
-                        raise Exception("Album download finished but no tracks were saved")
                     
                 elif url_type == "track":
                     success = self.bot.download_track(url, show_summary=False)
                     item.tracks_completed = 1 if success else 0
                     item.tracks_total = 1
-
-                    if item.tracks_completed == 0:
-                        raise Exception("Track download finished but no file was saved")
-
                     self.log_status("🎤 Track downloaded successfully")
-                    self.log_status(f"📁 Saved to: {Path(item.settings['output_dir'])}")
                 
                 item.progress = 100.0
                 # Success - break out of retry loop
@@ -1332,7 +1281,7 @@ Tracks: {stats['total_tracks']}"""
             try:
                 with open(settings_file, 'r') as f:
                     settings = json.load(f)
-                    self.output_dir.set(settings.get("output_dir", str(Path.home() / "Music" / "spotybot")))
+                    self.output_dir.set(settings.get("output_dir", str(Path.home() / "Music" / "SpotyBot")))
                     self.format_var.set(settings.get("format", "mp3"))
                     self.quality_var.set(settings.get("quality", "192k"))
                     self.concurrent_var.set(settings.get("concurrent", 8))
@@ -1385,36 +1334,21 @@ Tracks: {stats['total_tracks']}"""
     
     def update_ui_loop(self):
         """Update UI periodically"""
+        # Update progress bar if downloading
         if self.current_download:
-            # Show per-track progress if we have it
-            if self.current_track_total > 0:
-                frac = self.current_track_num / self.current_track_total
-                self.progress_bar.set(frac)
-                self.track_counter_label.configure(
-                    text=f"Downloading {self.current_track_num} / {self.current_track_total}"
-                )
-                # Truncate long track names so the label fits
-                name = self.current_track_name
-                if len(name) > 65:
-                    name = name[:62] + "..."
-                self.progress_label.configure(text=name)
-            else:
-                self.progress_bar.set(0)
-                self.track_counter_label.configure(text="Starting...")
-                self.progress_label.configure(
-                    text=self.current_download.url[:65] + ("..." if len(self.current_download.url) > 65 else "")
-                )
+            self.progress_bar.set(self.current_download.progress / 100.0)
+            self.progress_label.configure(
+                text=f"Downloading: {self.current_download.url[:50]}..."
+            )
         else:
             if self.is_downloading:
-                self.track_counter_label.configure(text="Processing queue...")
-                self.progress_label.configure(text="")
+                self.progress_label.configure(text="Processing queue...")
             else:
                 self.progress_bar.set(0)
-                self.track_counter_label.configure(text="")
                 self.progress_label.configure(text="Ready to download")
-
+        
         # Schedule next update
-        self.after(300, self.update_ui_loop)
+        self.after(500, self.update_ui_loop)
 
 
 def main():

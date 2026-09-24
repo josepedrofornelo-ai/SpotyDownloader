@@ -20,10 +20,11 @@ class Config(BaseModel):
     download_format: str = "mp3"
     download_quality: str = "320k"
     output_template: str = "{artists} - {title}.{output-ext}"
-    output_directory: Path = Path("./downloads")
+    output_directory: Path = Path.home() / "Music" / "spotybot"
     
     # Audio provider settings
     audio_provider: str = "youtube-music"
+    audio_providers_fallback: List[str] = ["youtube-music", "soundcloud"]
     lyrics_providers: List[str] = ["genius", "azlyrics", "musixmatch"]
     
     # Download behavior
@@ -69,15 +70,16 @@ class Config(BaseModel):
         else:
             # Try to load .env from current directory
             load_dotenv()
-        
+
         return cls(
             spotify_client_id=os.getenv("SPOTIFY_CLIENT_ID", ""),
             spotify_client_secret=os.getenv("SPOTIFY_CLIENT_SECRET", ""),
             download_format=os.getenv("DOWNLOAD_FORMAT", "mp3"),
             download_quality=os.getenv("DOWNLOAD_QUALITY", "320k"),
             output_template=os.getenv("OUTPUT_TEMPLATE", "{artists} - {title}.{output-ext}"),
-            output_directory=Path(os.getenv("OUTPUT_DIRECTORY", "./downloads")),
+            output_directory=Path(os.getenv("OUTPUT_DIRECTORY", str(Path.home() / "Music" / "spotybot"))),
             audio_provider=os.getenv("AUDIO_PROVIDER", "youtube-music"),
+
             lyrics_providers=os.getenv("LYRICS_PROVIDERS", "genius,azlyrics,musixmatch").split(","),
             max_concurrent_downloads=int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "4")),
             skip_existing_files=os.getenv("SKIP_EXISTING_FILES", "true").lower() == "true",
@@ -95,8 +97,13 @@ class Config(BaseModel):
     
     def get_spotdl_options(self) -> dict:
         """Get spotDL configuration options"""
+        audio_providers = [self.audio_provider]
+        for provider in self.audio_providers_fallback:
+            if provider and provider not in audio_providers:
+                audio_providers.append(provider)
+
         options = {
-            "audio_providers": [self.audio_provider],
+            "audio_providers": audio_providers,
             "output": str(self.output_directory / self.output_template),
             "format": self.download_format,
             "bitrate": self.download_quality,
@@ -106,6 +113,7 @@ class Config(BaseModel):
             "log_level": self.log_level,
             "skip_explicit": False,
             "generate_lrc": self.download_lyrics,
+            "print_errors": True,
         }
         
         # Only add lyrics providers if lyrics are enabled
